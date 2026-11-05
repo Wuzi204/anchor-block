@@ -1,0 +1,36 @@
+## Rule custom MẪU để săn CVE — sửa / nhân bản cho từng target.
+## Semgrep nạp mọi .yaml/.yml trong thư mục này qua `--config ./rules`.
+## Test rule:  semgrep scan --test   (đặt file .fixtures cạnh rule nếu muốn)
+
+rules:
+  - id: nodejs-child-process-tainted-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      Dữ liệu có thể do người dùng kiểm soát chảy vào child_process.exec/execSync.
+      Nếu nguồn này đến từ request (req.query/body/params) thì đây là command
+      injection có khả năng thành CVE. Cần xác minh: nguồn có thật sự attacker-
+      controlled không, và có sanitize/allowlist ở giữa không.
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+      owasp: "A03:2021 - Injection"
+      confidence: MEDIUM
+      references:
+        - https://owasp.org/Top10/A03_2021-Injection/
+    mode: taint
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: req.headers
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: child_process.exec(...)
+              - pattern: child_process.execSync(...)
+              - pattern: $CP.exec(...)
+              - pattern: $CP.execSync(...)
+    pattern-sanitizers:
+      - pattern: shellEscape(...)
+      - pattern: $LIB.quote(...)

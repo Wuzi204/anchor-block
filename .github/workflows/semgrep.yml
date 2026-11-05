@@ -1,0 +1,75 @@
+name: semgrep-cve-scan
+
+# Chạy Semgrep mỗi khi bạn đẩy source code của plugin/thư viện lên repo.
+# Mục tiêu: sinh ra findings (JSON + SARIF) để script local trong WSL kéo về cho Claude triage.
+# KHÔNG fail build khi có finding — ta MUỐN gom finding, không gate.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch: {}   # cho phép bấm "Run workflow" thủ công trên tab Actions
+
+permissions:
+  contents: read
+  security-events: write   # cần để upload SARIF lên tab Security > Code scanning (tùy chọn)
+
+jobs:
+  semgrep:
+    name: Semgrep scan
+    runs-on: ubuntu-latest
+    # Image chính thức đã cài sẵn semgrep -> không cần pip install
+    container:
+      image: semgrep/semgrep:latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep (registry + custom rules)
+        # Một lần quét, xuất đồng thời JSON (cho Claude) và SARIF (cho code scanning).
+        # Thêm/bớt ruleset ở đây. --metrics=off để không gửi dữ liệu lên Semgrep Cloud.
+        run: |
+          semgrep scan \
+            --config p/default \
+            --config p/security-audit \
+            --config p/secrets \
+            --config ./rules \
+            --json-output=semgrep.json \
+            --sarif-output=semgrep.sarif \
+            --metrics=off \
+            --timeout 120 \
+            --max-target-bytes 5000000 \
+          || echo "Semgrep finished with findings or non-fatal errors (exit $?) — tiếp tục upload."
+
+      - name: Show finding count
+        if: always()
+        run: |
+          if [ -f semgrep.json ]; then
+            python3 - <<'PY'
+          import json
+          with open("semgrep.json") as f:
+              data = json.load(f)
+          results = data.get("results", [])
+          errs = data.get("errors", [])
+          print(f"::notice::Semgrep: {len(results)} findings, {len(errs)} errors")
+          PY
+          fi
+
+      - name: Upload findings artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-findings
+          path: |
+            semgrep.json
+            semgrep.sarif
+          retention-days: 14
+          if-no-files-found: warn
+
+      # Tùy chọn: đẩy SARIF vào tab Security của repo để xem finding ngay trên GitHub.
+      # Bỏ comment nếu repo bật GitHub code scanning (public repo hoặc GitHub Advanced Security).
+      # - name: Upload SARIF to code scanning
+      #   if: always()
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   with:
+      #     sarif_file: semgrep.sarif
